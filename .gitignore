@@ -1,0 +1,5 @@
+.env
+store.db
+logs/
+__pycache__/
+*.pyc

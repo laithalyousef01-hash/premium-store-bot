@@ -1,0 +1,26 @@
+{
+  "subscriptions": [
+    {
+      "id": "netflix",
+      "name": "Netflix",
+      "plans": [
+        { "name": "1 Month", "price": 4 },
+        { "name": "3 Months", "price": 10 }
+      ]
+    },
+    {
+      "id": "chatgpt",
+      "name": "ChatGPT Plus",
+      "plans": [
+        { "name": "1 Month", "price": 12 }
+      ]
+    },
+    {
+      "id": "spotify",
+      "name": "Spotify Premium",
+      "plans": [
+        { "name": "1 Month", "price": 3 }
+      ]
+    }
+  ]
+}

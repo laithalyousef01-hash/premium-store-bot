@@ -1,0 +1,301 @@
+import json
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
+from telegram.ext import (
+    ApplicationBuilder,
+    CommandHandler,
+    CallbackQueryHandler,
+    MessageHandler,
+    filters,
+    ContextTypes,
+)
+
+import config
+from database import create_order
+
+
+with open("products.json", "r", encoding="utf-8") as f:
+    PRODUCTS = json.load(f)
+
+
+def main_menu_keyboard() -> InlineKeyboardMarkup:
+    keyboard = [
+        [InlineKeyboardButton("🛒 Subscriptions", callback_data="subscriptions")],
+        [InlineKeyboardButton("🎮 Request Game", callback_data="request_game")],
+        [InlineKeyboardButton("💳 Payment Methods", callback_data="payments")],
+        [InlineKeyboardButton("🛠 Support", callback_data="support")],
+    ]
+    return InlineKeyboardMarkup(keyboard)
+
+
+def back_to_main_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        [[InlineKeyboardButton("⬅ Back", callback_data="main_menu")]]
+    )
+
+
+def get_display_username(user) -> str:
+    return f"@{user.username}" if user.username else "No username"
+
+
+def get_display_name(user) -> str:
+    return user.full_name if user.full_name else "Unknown"
+
+
+def find_product_by_id(product_id: str):
+    for product in PRODUCTS["subscriptions"]:
+        if product["id"] == product_id:
+            return product
+    return None
+
+
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data.clear()
+    await update.message.reply_text(
+        f"Welcome to {config.STORE_NAME}\nChoose an option:",
+        reply_markup=main_menu_keyboard(),
+    )
+
+
+async def handle_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+
+    if query.data == "main_menu":
+        context.user_data.pop("request_game", None)
+        await query.edit_message_text(
+            f"Welcome to {config.STORE_NAME}\nChoose an option:",
+            reply_markup=main_menu_keyboard(),
+        )
+        return
+
+    if query.data == "subscriptions":
+        keyboard = []
+
+        for product in PRODUCTS["subscriptions"]:
+            keyboard.append(
+                [InlineKeyboardButton(product["name"], callback_data=f"product_{product['id']}")]
+            )
+
+        keyboard.append([InlineKeyboardButton("⬅ Back", callback_data="main_menu")])
+
+        await query.edit_message_text(
+            "Choose subscription:",
+            reply_markup=InlineKeyboardMarkup(keyboard),
+        )
+        return
+
+    if query.data.startswith("product_"):
+        product_id = query.data.split("_", 1)[1]
+        product = find_product_by_id(product_id)
+
+        if not product:
+            await query.edit_message_text(
+                "Product not found.",
+                reply_markup=back_to_main_keyboard(),
+            )
+            return
+
+        keyboard = []
+
+        for index, plan in enumerate(product["plans"]):
+            keyboard.append([
+                InlineKeyboardButton(
+                    f"{plan['name']} - ${plan['price']}",
+                    callback_data=f"buy|{product['id']}|{index}",
+                )
+            ])
+
+        keyboard.append([InlineKeyboardButton("⬅ Back", callback_data="subscriptions")])
+
+        await query.edit_message_text(
+            f"{product['name']} Plans:",
+            reply_markup=InlineKeyboardMarkup(keyboard),
+        )
+        return
+
+    if query.data.startswith("buy|"):
+        _, product_id, plan_index_str = query.data.split("|")
+        plan_index = int(plan_index_str)
+
+        product = find_product_by_id(product_id)
+        if not product:
+            await query.edit_message_text(
+                "Product not found.",
+                reply_markup=back_to_main_keyboard(),
+            )
+            return
+
+        if plan_index < 0 or plan_index >= len(product["plans"]):
+            await query.edit_message_text(
+                "Plan not found.",
+                reply_markup=back_to_main_keyboard(),
+            )
+            return
+
+        selected_plan = product["plans"][plan_index]
+
+        context.user_data["product_name"] = product["name"]
+        context.user_data["product_id"] = product["id"]
+        context.user_data["plan_name"] = selected_plan["name"]
+        context.user_data["plan_price"] = selected_plan["price"]
+
+        keyboard = [
+            [InlineKeyboardButton("USDT", callback_data="pay_usdt")],
+            [InlineKeyboardButton("CliQ / Bank", callback_data="pay_bank")],
+            [InlineKeyboardButton("⬅ Back", callback_data=f"product_{product['id']}")],
+        ]
+
+        await query.edit_message_text(
+            f"Product: {product['name']}\n"
+            f"Plan: {selected_plan['name']}\n"
+            f"Price: ${selected_plan['price']}\n\n"
+            f"Choose payment method:",
+            reply_markup=InlineKeyboardMarkup(keyboard),
+        )
+        return
+
+    if query.data == "pay_usdt":
+        context.user_data["payment"] = f"USDT - {config.USDT_NETWORK}"
+
+        await query.edit_message_text(
+            f"💰 USDT Payment\n\n"
+            f"Product: {context.user_data.get('product_name')}\n"
+            f"Plan: {context.user_data.get('plan_name')}\n"
+            f"Price: ${context.user_data.get('plan_price')}\n\n"
+            f"Network: {config.USDT_NETWORK}\n"
+            f"Wallet Address:\n{config.USDT_WALLET}\n\n"
+            f"⚠️ Send only on {config.USDT_NETWORK}\n"
+            f"After payment, please send the payment screenshot.",
+            reply_markup=InlineKeyboardMarkup(
+                [[InlineKeyboardButton("⬅ Back", callback_data="subscriptions")]]
+            ),
+        )
+        return
+
+    if query.data == "pay_bank":
+        context.user_data["payment"] = "CliQ"
+
+        await query.edit_message_text(
+            f"🏦 CliQ / Bank Transfer\n\n"
+            f"Product: {context.user_data.get('product_name')}\n"
+            f"Plan: {context.user_data.get('plan_name')}\n"
+            f"Price: ${context.user_data.get('plan_price')}\n\n"
+            f"Receiver Name:\n{config.CLIQ_NAME}\n\n"
+            f"After payment, please send the payment screenshot.",
+            reply_markup=InlineKeyboardMarkup(
+                [[InlineKeyboardButton("⬅ Back", callback_data="subscriptions")]]
+            ),
+        )
+        return
+
+    if query.data == "payments":
+        await query.edit_message_text(
+            f"💳 Payment Methods\n\n"
+            f"1) CliQ / Bank Transfer\n"
+            f"Receiver Name: {config.CLIQ_NAME}\n\n"
+            f"2) USDT Wallet\n"
+            f"Network: {config.USDT_NETWORK}\n"
+            f"Address:\n{config.USDT_WALLET}\n\n"
+            f"⚠️ Please send only on {config.USDT_NETWORK}",
+            reply_markup=back_to_main_keyboard(),
+        )
+        return
+
+    if query.data == "support":
+        await query.edit_message_text(
+            f"🛠 Support\n\n"
+            f"For help, contact:\n{config.SUPPORT_USERNAME}\n\n"
+            f"You can also complete your order here and our team will follow up.",
+            reply_markup=back_to_main_keyboard(),
+        )
+        return
+
+    if query.data == "request_game":
+        context.user_data.clear()
+        context.user_data["request_game"] = True
+
+        await query.edit_message_text(
+            "🎮 Send the game name and platform.\n\nExample:\nEA FC 25 - PS5",
+            reply_markup=back_to_main_keyboard(),
+        )
+        return
+
+
+async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    username = get_display_username(user)
+    full_name = get_display_name(user)
+
+    if context.user_data.get("request_game") and update.message.text:
+        text = update.message.text.strip()
+
+        await context.bot.send_message(
+            chat_id=config.SUPPORT_GROUP_ID,
+            text=(
+                f"🎮 New Game Request\n\n"
+                f"User: {username}\n"
+                f"Name: {full_name}\n"
+                f"User ID: {user.id}\n"
+                f"Request: {text}"
+            ),
+        )
+
+        await update.message.reply_text("Your request was sent successfully.")
+        context.user_data.clear()
+        return
+
+    if update.message.photo:
+        product = context.user_data.get("product_name")
+        plan = context.user_data.get("plan_name")
+        payment = context.user_data.get("payment")
+
+        if not product or not plan or not payment:
+            await update.message.reply_text(
+                "Please choose a product and payment method first."
+            )
+            return
+
+        order_id = create_order(
+            user.id,
+            user.username if user.username else "NoUsername",
+            product,
+            plan,
+            payment,
+        )
+
+        photo = update.message.photo[-1]
+
+        await context.bot.send_photo(
+            chat_id=config.SUPPORT_GROUP_ID,
+            photo=photo.file_id,
+            caption=(
+                f"💳 Payment Proof\n\n"
+                f"Order ID: {order_id}\n"
+                f"User: {username}\n"
+                f"Name: {full_name}\n"
+                f"User ID: {user.id}\n"
+                f"Product: {product}\n"
+                f"Plan: {plan}\n"
+                f"Payment: {payment}"
+            ),
+        )
+
+        await update.message.reply_text(
+            f"Payment proof received ✅\n"
+            f"Your Order ID is: {order_id}\n"
+            f"Support will contact you shortly."
+        )
+
+        context.user_data.clear()
+        return
+
+
+app = ApplicationBuilder().token(config.BOT_TOKEN).build()
+
+app.add_handler(CommandHandler("start", start))
+app.add_handler(CallbackQueryHandler(handle_buttons))
+app.add_handler(MessageHandler(filters.TEXT | filters.PHOTO, handle_message))
+
+print("Bot running...")
+
+app.run_polling()
